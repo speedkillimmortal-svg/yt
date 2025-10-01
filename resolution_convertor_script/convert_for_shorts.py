@@ -56,7 +56,7 @@ def convert_to_vertical_webm(input_path, output_path):
     # Overlay bottom icon
     if os.path.exists(icon_path):
         video = video.overlay(
-            ffmpeg.input(icon_path).filter('scale', 400, bottom_bar_height),
+            ffmpeg.input(icon_path).filter('scale', 300, bottom_bar_height),
             x=0,
             y=TARGET_HEIGHT - bottom_bar_height
         )
