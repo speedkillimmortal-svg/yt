@@ -108,15 +108,22 @@ def split_video_into_parts(input_path, num_parts=4, output_prefix="part"):
     return part_files
 
 if __name__ == "__main__":
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    video_path = os.path.join(script_dir, "input.webm")
-    output_dir = os.path.join(script_dir, f"{KILL_KEYWORD.capitalize()}_clips")
-
-    print("🎬 Splitting main video into 4 parts...")
-    part_files = split_video_into_parts(video_path, num_parts=4, output_prefix=os.path.join(script_dir, "part"))
-    print(f"Parts created: {part_files}")
-
-    for idx, part_file in enumerate(part_files, 1):
-        print(f"\n🔎 Processing {part_file} ...")
-        part_output_dir = os.path.join(output_dir, f"part{idx}")
-        find_immortal_and_extract(part_file, part_output_dir, pre_sec=PRE_SEC, post_sec=POST_SEC)
+    import sys
+    import gc
+    try:
+        # Use absolute path for input.webm
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        video_path = os.path.join(script_dir, "input.webm")
+        output_dir = os.path.join(script_dir, f"{KILL_KEYWORD.capitalize()}_clips")
+        print("Splitting main video into 4 parts...")
+        part_files = split_video_into_parts(video_path, num_parts=4, output_prefix=os.path.join(script_dir, "part"))
+        print(f"Parts created: {part_files}")
+        for idx, part_file in enumerate(part_files, 1):
+            print(f"\nProcessing {part_file} ...")
+            part_output_dir = os.path.join(output_dir, f"part{idx}")
+            find_immortal_and_extract(part_file, part_output_dir, pre_sec=PRE_SEC, post_sec=POST_SEC)
+        gc.collect()
+        sys.exit(0)
+    except Exception as e:
+        print(f"[FATAL ERROR] {e}")
+        sys.exit(1)
