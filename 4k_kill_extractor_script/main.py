@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-kill_extractor_yolo_m1_webm.py
-Optimized kill-clip extractor for M1 Mac (supports EasyOCR with MPS or PaddleOCR).
-- Keeps output in .webm format (lossless, no quality loss).
-- Splits large files into manageable parts.
-- Optionally uses YOLO to auto-detect kill-feed region.
+kill_extractor_enemy_downed_only.py
+Optimized extractor for M1 Mac (EasyOCR with MPS or PaddleOCR).
+- Only detects "ENEMY DOWNED" text (top-right).
+- Outputs lossless .webm clips.
+- Splits video into manageable parts.
 """
 
 import os
@@ -15,18 +15,14 @@ import subprocess
 from concurrent.futures import ThreadPoolExecutor
 
 # === USER CONFIGURATION ===
-KILL_KEYWORD = "immortal"       # keyword to detect in kill-feed
-PRE_SEC = 5                     # seconds before kill
-POST_SEC = 5                    # seconds after kill
-NUM_PARTS = 4                   # split big video into parts
-OCR_INTERVAL = 0.5              # OCR sampling interval (seconds)
-OCR_RESIZE = 0.5                # resize factor before OCR
-DETECT_RESIZE = 0.5             # resize for YOLO detection
-MAX_THREADS = 2                 # OCR parallelism
-OCR_ENGINE = "easyocr"          # "easyocr" or "paddleocr"
-YOLO_CONF_THRESH = 0.3          # YOLO confidence threshold
-YOLO_SAMPLE_FRAMES = 20         # frames to sample for YOLO box
-COOLDOWN_SEC = PRE_SEC + POST_SEC  # duplicate detection cooldown
+KILL_KEYWORDS = ["ENEMY DOWNED"]   # only look for this phrase
+PRE_SEC = 5                        # seconds before kill
+POST_SEC = 5                       # seconds after kill
+NUM_PARTS = 4                      # split video into N parts
+OCR_INTERVAL = 1.0                 # OCR every N seconds
+OCR_RESIZE = 0.6                   # resize before OCR (speeds up)
+MAX_THREADS = 2                    # parallel OCR workers
+COOLDOWN_SEC = PRE_SEC + POST_SEC  # cooldown to avoid duplicates
 
 # === OCR Setup ===
 use_mps = False
@@ -36,36 +32,15 @@ try:
 except Exception:
     torch = None
 
-if OCR_ENGINE == "easyocr":
-    import easyocr
-    print(f"[INFO] Using EasyOCR (MPS available: {use_mps})")
-    reader = easyocr.Reader(['en'], gpu=use_mps)
+import easyocr
+print(f"[INFO] Using EasyOCR (MPS available: {use_mps})")
+reader = easyocr.Reader(['en'], gpu=use_mps)
 
-    def ocr_frame(region_bgr):
-        if OCR_RESIZE != 1.0:
-            region_bgr = cv2.resize(region_bgr, None, fx=OCR_RESIZE, fy=OCR_RESIZE)
-        results = reader.readtext(region_bgr, detail=0)
-        return " ".join(results).strip()
-
-elif OCR_ENGINE == "paddleocr":
-    from paddleocr import PaddleOCR
-    print("[INFO] Using PaddleOCR")
-    reader = PaddleOCR(use_angle_cls=True, lang='en')
-
-    def ocr_frame(region_bgr):
-        if OCR_RESIZE != 1.0:
-            region_bgr = cv2.resize(region_bgr, None, fx=OCR_RESIZE, fy=OCR_RESIZE)
-        results = reader.ocr(region_bgr, cls=True)
-        lines = []
-        for r in results:
-            try:
-                if isinstance(r, list) and len(r) > 1:
-                    lines.append(r[1][0])
-            except Exception:
-                pass
-        return " ".join(lines).strip()
-else:
-    raise ValueError("OCR_ENGINE must be 'easyocr' or 'paddleocr'.")
+def ocr_frame(region_bgr):
+    if OCR_RESIZE != 1.0:
+        region_bgr = cv2.resize(region_bgr, None, fx=OCR_RESIZE, fy=OCR_RESIZE)
+    results = reader.readtext(region_bgr, detail=0)
+    return " ".join(results).strip()
 
 
 # === Video Utils ===
@@ -102,7 +77,7 @@ def split_video_into_parts(input_path, num_parts=NUM_PARTS, output_prefix="part"
 
 
 # === Core Extraction ===
-def find_and_extract(video_path, output_dir, ocr_interval=OCR_INTERVAL, pre_sec=PRE_SEC, post_sec=POST_SEC):
+def find_and_extract(video_path, output_dir):
     os.makedirs(output_dir, exist_ok=True)
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
@@ -114,15 +89,14 @@ def find_and_extract(video_path, output_dir, ocr_interval=OCR_INTERVAL, pre_sec=
     duration = frame_count / fps if fps else 0
     print(f"[INFO] Processing {video_path} | FPS={fps:.2f}, frames={frame_count}, duration={duration:.2f}s")
 
-    # Fallback kill-feed box = left 25% width, middle third height
-    cap.set(cv2.CAP_PROP_POS_MSEC, 0)
+    # Kill feed location (top-right box)
     ret, frame = cap.read()
     if not ret:
         print("[WARN] Could not read first frame.")
         return
     h, w = frame.shape[:2]
-    x1, x2 = 0, int(w * 0.25)
-    y1, y2 = int(h * 1/3), int(h * 2/3)
+    x1, x2 = int(w * 0.70), w   # right 30%
+    y1, y2 = 0, int(h * 0.25)   # top 25%
     feed_box = (x1, y1, x2, y2)
 
     found_times = []
@@ -134,33 +108,34 @@ def find_and_extract(video_path, output_dir, ocr_interval=OCR_INTERVAL, pre_sec=
         cap.set(cv2.CAP_PROP_POS_MSEC, sec * 1000)
         ret, frame = cap.read()
         if not ret:
-            sec += ocr_interval
+            sec += OCR_INTERVAL
             continue
 
         x1, y1, x2, y2 = feed_box
         region = frame[y1:y2, x1:x2]
         text = executor.submit(ocr_frame, region).result()
 
-        if text and KILL_KEYWORD.lower() in text.lower():
-            if sec - last_found > COOLDOWN_SEC:
-                found_times.append(sec)
-                last_found = sec
-                print(f"[FOUND] '{KILL_KEYWORD}' at {sec:.2f}s text={text}")
-        sec += ocr_interval
+        if text:
+            for kw in KILL_KEYWORDS:
+                if kw.lower() in text.lower():
+                    if sec - last_found > COOLDOWN_SEC:
+                        found_times.append(sec)
+                        last_found = sec
+                        print(f"[FOUND] '{kw}' at {sec:.2f}s text={text}")
+        sec += OCR_INTERVAL
 
     cap.release()
     executor.shutdown(wait=True)
 
     # Save clips in .webm (lossless copy)
     if found_times:
-        # Extract part number from video_path (e.g., part3.webm -> 3)
         import re
-        part_match = re.search(r'part(\d+)\\?.webm', os.path.basename(video_path))
+        part_match = re.search(r'part(\d+)\.webm', os.path.basename(video_path))
         part_num = part_match.group(1) if part_match else 'X'
         for idx, ft in enumerate(found_times, start=1):
-            start = max(0.0, ft - pre_sec)
-            clip_len = pre_sec + post_sec
-            out_file = os.path.join(output_dir, f"{KILL_KEYWORD.lower()}_clip_part_{part_num}_clip_{idx}.webm")
+            start = max(0.0, ft - PRE_SEC)
+            clip_len = PRE_SEC + POST_SEC
+            out_file = os.path.join(output_dir, f"downed_clip_part_{part_num}_{idx}.webm")
             print(f"[EXTRACT] {out_file} start={start:.2f}s dur={clip_len:.2f}s")
             (
                 ffmpeg
@@ -171,7 +146,7 @@ def find_and_extract(video_path, output_dir, ocr_interval=OCR_INTERVAL, pre_sec=
             )
             print(f"[SAVED] {out_file}")
     else:
-        print(f"[INFO] No '{KILL_KEYWORD}' found in {video_path}")
+        print(f"[INFO] No '{KILL_KEYWORDS[0]}' found in {video_path}")
 
 
 # === Main ===
@@ -188,14 +163,13 @@ def main():
 
     for i, part in enumerate(parts, start=1):
         print(f"\n[INFO] Processing part {i}/{len(parts)} : {part}")
-        out_dir = os.path.join(script_dir, f"{KILL_KEYWORD.capitalize()}_clips", f"part{i}")
-        find_and_extract(part, out_dir, ocr_interval=OCR_INTERVAL, pre_sec=PRE_SEC, post_sec=POST_SEC)
+        out_dir = os.path.join(script_dir, "Downed_clips", f"part{i}")
+        find_and_extract(part, out_dir)
 
     print("[DONE] All parts processed.")
 
 
 if __name__ == "__main__":
-    import sys
     import gc
     try:
         main()
