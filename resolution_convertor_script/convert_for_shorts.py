@@ -56,7 +56,7 @@ def convert_to_vertical_webm(input_path, output_path):
     # Overlay bottom icon
     if os.path.exists(icon_path):
         video = video.overlay(
-            ffmpeg.input(icon_path).filter('scale', 400, bottom_bar_height),
+            ffmpeg.input(icon_path).filter('scale', 300, bottom_bar_height),
             x=0,
             y=TARGET_HEIGHT - bottom_bar_height
         )
@@ -120,4 +120,12 @@ def main():
             print(f'Saved: {out_path}')
 
 if __name__ == '__main__':
-    main()
+    import sys
+    import gc
+    try:
+        main()
+        gc.collect()
+        sys.exit(0)
+    except Exception as e:
+        print(f'[FATAL ERROR] {e}')
+        sys.exit(1)

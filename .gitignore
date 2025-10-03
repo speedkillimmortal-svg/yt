@@ -1,0 +1,27 @@
+# macOS system files
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# VSCode
+.vscode/
+
+# Environment
+.env
+.venv/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Output folders
+output_clips/
+*.log
+*.tmp
+
+# Other
+*.swp
+*.swo

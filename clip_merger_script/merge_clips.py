@@ -55,4 +55,12 @@ def main():
             batch_num += 1
 
 if __name__ == '__main__':
-    main()
+    import sys
+    import gc
+    try:
+        main()
+        gc.collect()
+        sys.exit(0)
+    except Exception as e:
+        print(f'[FATAL ERROR] {e}')
+        sys.exit(1)

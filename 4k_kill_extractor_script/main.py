@@ -153,10 +153,14 @@ def find_and_extract(video_path, output_dir, ocr_interval=OCR_INTERVAL, pre_sec=
 
     # Save clips in .webm (lossless copy)
     if found_times:
+        # Extract part number from video_path (e.g., part3.webm -> 3)
+        import re
+        part_match = re.search(r'part(\d+)\\?.webm', os.path.basename(video_path))
+        part_num = part_match.group(1) if part_match else 'X'
         for idx, ft in enumerate(found_times, start=1):
             start = max(0.0, ft - pre_sec)
             clip_len = pre_sec + post_sec
-            out_file = os.path.join(output_dir, f"{KILL_KEYWORD.lower()}_clip_{idx}.webm")
+            out_file = os.path.join(output_dir, f"{KILL_KEYWORD.lower()}_clip_part_{part_num}_clip_{idx}.webm")
             print(f"[EXTRACT] {out_file} start={start:.2f}s dur={clip_len:.2f}s")
             (
                 ffmpeg
@@ -191,4 +195,12 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+    import gc
+    try:
+        main()
+        gc.collect()
+        sys.exit(0)
+    except Exception as e:
+        print(f"[FATAL ERROR] {e}")
+        sys.exit(1)
