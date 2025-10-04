@@ -170,13 +170,15 @@ def merge_pairs_and_store_all(parts_clips, merged_root):
                 temp_merges.append(merged_out)
                 i += 2
             else:
-                if temp_merges:
-                    print("[MERGE-ODD] Merging leftover with last merged batch...")
-                    merge_clips_together([temp_merges[-1], clip_list[i]], temp_merges[-1])
+                # Odd one left: merge last three if possible, else just copy
+                if len(clip_list) >= 3:
+                    merged_out = os.path.join(merged_part_dir, f"merged_{part_idx}_final3.webm")
+                    merge_clips_together(clip_list[-3:], merged_out)
+                    temp_merges.append(merged_out)
                 else:
                     single_copy = os.path.join(merged_part_dir, f"merged_{part_idx}_single.webm")
                     merge_clips_together([clip_list[i]], single_copy)
-                i += 1
+                break
         merged_all.extend(temp_merges)
     print(f"\n[INFO] Total merged clips across all parts: {len(merged_all)}")
     return merged_all
@@ -303,24 +305,36 @@ def main_pipeline():
         parts_clips.append(clips)
     merged_root = os.path.join(script_dir, "Merged_All_Parts")
     merge_pairs_and_store_all(parts_clips, merged_root)
+
     # === Shorts Conversion ===
-    output_dir = os.path.join(script_dir, "output_clips")
-    os.makedirs(output_dir, exist_ok=True)
+    youtube_shorts_dir = os.path.join(script_dir, "youtube_shorts")
+    os.makedirs(youtube_shorts_dir, exist_ok=True)
     for root, dirs, files in os.walk(merged_root):
         for fname in files:
             if is_video_file(fname):
                 in_path = os.path.join(root, fname)
                 base, _ = os.path.splitext(fname)
-                out_path = os.path.join(output_dir, f"{base}_vertical4k.webm")
+                out_path = os.path.join(youtube_shorts_dir, f"{base}_vertical4k.webm")
                 print(f'Converting {fname} → {out_path}')
                 convert_to_vertical_webm(in_path, out_path, script_dir)
                 print(f'Saved: {out_path}')
+
     # === MP4 Conversion for Shorts/Reels ===
-    shorts_dir = os.path.join(script_dir, "youtube_shorts")
     reels_dir = os.path.join(script_dir, "insta_reels")
-    convert_webm_to_mp4(output_dir, shorts_dir, label="YouTube Shorts")
-    convert_webm_to_mp4(output_dir, reels_dir, label="Insta Reels")
-    print("[DONE] Pipeline complete. All outputs in output_clips/, youtube_shorts/, and insta_reels/")
+    convert_webm_to_mp4(youtube_shorts_dir, reels_dir, label="Insta Reels")
+
+    # Cleanup: remove all except youtube_shorts and insta_reels
+    for folder in ["Downed_clips", "Merged_All_Parts"]:
+        folder_path = os.path.join(script_dir, folder)
+        if os.path.exists(folder_path):
+            shutil.rmtree(folder_path)
+    for fname in os.listdir(script_dir):
+        if fname.startswith("part") and fname.endswith(".webm"):
+            try:
+                os.remove(os.path.join(script_dir, fname))
+            except Exception:
+                pass
+    print("[DONE] Pipeline complete. All outputs in youtube_shorts/ and insta_reels/")
 
 if __name__ == "__main__":
     try:
