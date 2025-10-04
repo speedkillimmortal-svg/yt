@@ -1,9 +1,15 @@
+#!/usr/bin/env python3
 """
-Full 4K Kill Extractor to Shorts/Reels Pipeline
-- Step 1: Extracts and merges kill clips from input.webm (using main.py logic)
-- Step 2: Converts all merged clips in Merged_All_Parts to vertical 1080x1920 .webm (using convert_for_shorts.py logic)
-- Final outputs are in output_clips/
+Full 4K Kill Extractor to Shorts/Reels Pipeline (Optimized)
+------------------------------------------------------------
+1️⃣ Extracts and merges kill clips from input.webm (ENEMY DOWNED only)
+2️⃣ Converts merged clips to vertical 1080x1920 .webm (Shorts format)
+3️⃣ Converts vertical .webm → .mp4 (for Instagram Reels)
+4️⃣ Cleans up all temporary files safely at the end
+
+Maintains full 4K quality, optimized for M1 Macs, minimal RAM load.
 """
+
 import os
 import sys
 import gc
@@ -33,15 +39,22 @@ try:
     use_mps = torch.backends.mps.is_available()
 except Exception:
     torch = None
+
 import easyocr
+print(f"[INFO] Initializing EasyOCR (MPS available: {use_mps})...")
 reader = easyocr.Reader(['en'], gpu=use_mps)
 
+
+# === OCR ===
 def ocr_frame(region_bgr):
+    """OCR read a cropped region (resized for speed)."""
     if OCR_RESIZE != 1.0:
         region_bgr = cv2.resize(region_bgr, None, fx=OCR_RESIZE, fy=OCR_RESIZE)
     results = reader.readtext(region_bgr, detail=0)
     return " ".join(results).strip()
 
+
+# === Video Utilities ===
 def get_video_duration(input_path):
     try:
         result = subprocess.run([
@@ -52,6 +65,7 @@ def get_video_duration(input_path):
     except Exception as e:
         print(f"[ERROR] ffprobe failed: {e}")
         return None
+
 
 def split_video_into_parts(input_path, num_parts=NUM_PARTS, output_prefix="part"):
     duration = get_video_duration(input_path)
@@ -72,9 +86,11 @@ def split_video_into_parts(input_path, num_parts=NUM_PARTS, output_prefix="part"
         part_files.append(out_file)
     return part_files
 
+
+# === Merge Utility ===
 def merge_clips_together(clip_files, merged_output_path):
-    if len(clip_files) < 2:
-        print(f"[SKIP] Not enough clips to merge in {os.path.dirname(merged_output_path)}")
+    """Merge given clips losslessly."""
+    if len(clip_files) < 1:
         return
     list_file = os.path.join(os.path.dirname(merged_output_path), "merge_list.txt")
     with open(list_file, "w") as f:
@@ -85,40 +101,49 @@ def merge_clips_together(clip_files, merged_output_path):
         "-c", "copy", "-y", merged_output_path
     ]
     subprocess.run(cmd, check=True)
-    print(f"[MERGED] -> {merged_output_path}")
     os.remove(list_file)
+    print(f"[MERGED] {merged_output_path}")
 
+
+# === Kill Detection + Extraction ===
 def find_and_extract(video_path, output_dir):
     os.makedirs(output_dir, exist_ok=True)
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         print(f"[ERROR] Cannot open {video_path}")
         return []
+
     fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
     frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
     duration = frame_count / fps if fps else 0
     print(f"[INFO] Processing {video_path} | FPS={fps:.2f}, frames={frame_count}, duration={duration:.2f}s")
+
     ret, frame = cap.read()
     if not ret:
         print("[WARN] Could not read first frame.")
         return []
+
     h, w = frame.shape[:2]
     x1, x2 = int(w * 0.70), w
     y1, y2 = 0, int(h * 0.25)
     feed_box = (x1, y1, x2, y2)
+
     found_times = []
     last_found = -1e9
     sec = 0.0
     executor = ThreadPoolExecutor(max_workers=MAX_THREADS)
+
     while sec < duration:
         cap.set(cv2.CAP_PROP_POS_MSEC, sec * 1000)
         ret, frame = cap.read()
         if not ret:
             sec += OCR_INTERVAL
             continue
+
         x1, y1, x2, y2 = feed_box
         region = frame[y1:y2, x1:x2]
         text = executor.submit(ocr_frame, region).result()
+
         if text:
             for kw in KILL_KEYWORDS:
                 if kw.lower() in text.lower():
@@ -127,18 +152,19 @@ def find_and_extract(video_path, output_dir):
                         last_found = sec
                         print(f"[FOUND] '{kw}' at {sec:.2f}s text={text}")
         sec += OCR_INTERVAL
+
     cap.release()
     executor.shutdown(wait=True)
+
     extracted_files = []
     if found_times:
         import re
-        part_match = re.search(r'part(\d+)\\?.webm', os.path.basename(video_path))
+        part_match = re.search(r'part(\d+)\.webm', os.path.basename(video_path))
         part_num = part_match.group(1) if part_match else 'X'
         for idx, ft in enumerate(found_times, start=1):
             start = max(0.0, ft - PRE_SEC)
             clip_len = PRE_SEC + POST_SEC
             out_file = os.path.join(output_dir, f"downed_clip_part_{part_num}_{idx}.webm")
-            print(f"[EXTRACT] {out_file} start={start:.2f}s dur={clip_len:.2f}s")
             (
                 ffmpeg
                 .input(video_path, ss=start, t=clip_len)
@@ -150,17 +176,21 @@ def find_and_extract(video_path, output_dir):
             print(f"[SAVED] {out_file}")
     else:
         print(f"[INFO] No '{KILL_KEYWORDS[0]}' found in {video_path}")
+
     return extracted_files
 
+
+# === Merge in pairs across all parts ===
 def merge_pairs_and_store_all(parts_clips, merged_root):
     os.makedirs(merged_root, exist_ok=True)
     merged_all = []
     for part_idx, clip_list in enumerate(parts_clips, start=1):
         if not clip_list:
             continue
-        print(f"\n[MERGE] Processing part {part_idx} merges...")
+        print(f"\n[MERGE] Merging extracted clips from part {part_idx}...")
         merged_part_dir = os.path.join(merged_root, f"part{part_idx}")
         os.makedirs(merged_part_dir, exist_ok=True)
+
         i = 0
         temp_merges = []
         while i < len(clip_list):
@@ -170,31 +200,33 @@ def merge_pairs_and_store_all(parts_clips, merged_root):
                 temp_merges.append(merged_out)
                 i += 2
             else:
-                # Odd one left: merge last three if possible, else just copy
                 if len(clip_list) >= 3:
                     merged_out = os.path.join(merged_part_dir, f"merged_{part_idx}_final3.webm")
                     merge_clips_together(clip_list[-3:], merged_out)
                     temp_merges.append(merged_out)
                 else:
-                    single_copy = os.path.join(merged_part_dir, f"merged_{part_idx}_single.webm")
-                    merge_clips_together([clip_list[i]], single_copy)
+                    merged_out = os.path.join(merged_part_dir, f"merged_{part_idx}_single.webm")
+                    merge_clips_together([clip_list[i]], merged_out)
+                    temp_merges.append(merged_out)
                 break
         merged_all.extend(temp_merges)
     print(f"\n[INFO] Total merged clips across all parts: {len(merged_all)}")
     return merged_all
 
-# === Shorts Conversion ===
+
+# === Helper: Check video/music files ===
 def is_video_file(filename):
     return filename.lower().endswith(('.mp4', '.mov', '.avi', '.mkv', '.webm'))
+
 
 def pick_random_music(background_music_dir):
     if not os.path.exists(background_music_dir):
         return None
     music_files = [f for f in os.listdir(background_music_dir) if f.lower().endswith(('.mp3', '.wav', '.aac', '.m4a'))]
-    if not music_files:
-        return None
-    return os.path.join(background_music_dir, random.choice(music_files))
+    return os.path.join(background_music_dir, random.choice(music_files)) if music_files else None
 
+
+# === Conversion to Vertical Shorts ===
 def convert_to_vertical_webm(input_path, output_path, script_dir):
     TARGET_WIDTH = 1080
     TARGET_HEIGHT = 1920
@@ -204,6 +236,7 @@ def convert_to_vertical_webm(input_path, output_path, script_dir):
     logo_path = os.path.join(script_dir, 'channel_logo.jpg')
     background_music_dir = os.path.join(script_dir, 'background_musics')
     music_path = pick_random_music(background_music_dir)
+
     video = (
         ffmpeg
         .input(input_path)
@@ -211,59 +244,29 @@ def convert_to_vertical_webm(input_path, output_path, script_dir):
         .filter('crop', f"if(gt(in_w,{TARGET_WIDTH}),{TARGET_WIDTH},in_w)", video_height, '(in_w-out_w)/2', 0)
         .filter('pad', TARGET_WIDTH, TARGET_HEIGHT, 0, 0, color='black')
     )
-    if os.path.exists(icon_path):
-        video = video.overlay(
-            ffmpeg.input(icon_path).filter('scale', 300, bottom_bar_height),
-            x=0,
-            y=TARGET_HEIGHT - bottom_bar_height
-        )
-    if os.path.exists(logo_path):
-        video = video.overlay(
-            ffmpeg.input(logo_path).filter('scale', 180, 180),
-            x=f'{TARGET_WIDTH}-180-20',
-            y=f'{TARGET_HEIGHT}-180-10'
-        )
-    vp9_settings = dict(
-        vcodec='libvpx-vp9',
-        acodec='libopus',
-        crf=32,
-        **{"b:v": "0"},
-        audio_bitrate='128k',
-        **{"deadline": "realtime", "cpu-used": "4"},
-        pix_fmt='yuv420p'
-    )
-    if music_path:
-        music_input = ffmpeg.input(music_path, stream_loop=-1)
-        out = (
-            ffmpeg
-            .output(
-                video,
-                music_input.audio,
-                output_path,
-                shortest=None,
-                **vp9_settings
-            )
-            .global_args('-nostdin', '-loglevel', 'error')
-            .overwrite_output()
-        )
-    else:
-        out = (
-            ffmpeg
-            .output(
-                video,
-                output_path,
-                **vp9_settings
-            )
-            .global_args('-nostdin', '-loglevel', 'error')
-            .overwrite_output()
-        )
-    out.run()
 
+    if os.path.exists(icon_path):
+        video = video.overlay(ffmpeg.input(icon_path).filter('scale', 300, bottom_bar_height),
+                              x=0, y=TARGET_HEIGHT - bottom_bar_height)
+    if os.path.exists(logo_path):
+        video = video.overlay(ffmpeg.input(logo_path).filter('scale', 180, 180),
+                              x=f'{TARGET_WIDTH}-180-20', y=f'{TARGET_HEIGHT}-180-10')
+
+    vp9_settings = dict(vcodec='libvpx-vp9', acodec='libopus', crf=32,
+                        **{"b:v": "0", "deadline": "realtime", "cpu-used": "4"},
+                        audio_bitrate='128k', pix_fmt='yuv420p')
+
+    if music_path:
+        out = ffmpeg.output(video, ffmpeg.input(music_path, stream_loop=-1).audio,
+                            output_path, shortest=None, **vp9_settings)
+    else:
+        out = ffmpeg.output(video, output_path, **vp9_settings)
+
+    out.global_args('-nostdin', '-loglevel', 'error').overwrite_output().run()
+
+
+# === Convert Shorts .webm → .mp4 ===
 def convert_webm_to_mp4(input_folder, output_folder, label):
-    """
-    Converts all .webm files in input_folder to .mp4 in output_folder using 9:16 crop and scaling.
-    The label is used for print/logging (e.g., 'YouTube Shorts', 'Insta Reels').
-    """
     if not os.path.exists(output_folder):
         os.makedirs(output_folder)
     for file in os.listdir(input_folder):
@@ -272,58 +275,56 @@ def convert_webm_to_mp4(input_folder, output_folder, label):
             output_path = os.path.join(output_folder, os.path.splitext(file)[0] + ".mp4")
             crop_filter = "crop=in_h*9/16:in_h:(in_w-out_w)/2:0,scale=1080:1920"
             command = [
-                "ffmpeg",
-                "-i", input_path,
-                "-vf", crop_filter,
-                "-c:v", "h264_videotoolbox",
-                "-b:v", "6M",
-                "-maxrate", "8M",
-                "-bufsize", "12M",
-                "-c:a", "aac",
-                "-b:a", "128k",
-                "-movflags", "+faststart",
+                "ffmpeg", "-i", input_path, "-vf", crop_filter,
+                "-c:v", "h264_videotoolbox", "-b:v", "6M",
+                "-maxrate", "8M", "-bufsize", "12M",
+                "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart",
                 output_path
             ]
-            print(f"Converting for {label}: {file} → {output_path}")
+            print(f"[CONVERT] {file} → {output_path}")
             subprocess.run(command, check=True)
-    print(f"✅ Conversion complete! {label} MP4s saved in: {output_folder}")
+    print(f"✅ {label} conversion done! Saved in {output_folder}")
 
+
+# === Main Pipeline ===
 def main_pipeline():
     script_dir = os.path.dirname(os.path.abspath(__file__))
     video_path = os.path.join(script_dir, "input.webm")
     if not os.path.exists(video_path):
         print("[ERROR] input.webm not found in script folder.")
         sys.exit(1)
+
     print("[INFO] Splitting video into parts...")
     parts = split_video_into_parts(video_path, num_parts=NUM_PARTS, output_prefix=os.path.join(script_dir, "part"))
     print(f"[INFO] Parts created: {parts}")
+
     parts_clips = []
     for i, part in enumerate(parts, start=1):
         print(f"\n[INFO] Processing part {i}/{len(parts)} : {part}")
         out_dir = os.path.join(script_dir, "Downed_clips", f"part{i}")
         clips = find_and_extract(part, out_dir)
         parts_clips.append(clips)
+
     merged_root = os.path.join(script_dir, "Merged_All_Parts")
     merge_pairs_and_store_all(parts_clips, merged_root)
 
-    # === Shorts Conversion ===
+    # === Convert for Shorts ===
     youtube_shorts_dir = os.path.join(script_dir, "youtube_shorts")
     os.makedirs(youtube_shorts_dir, exist_ok=True)
-    for root, dirs, files in os.walk(merged_root):
+    for root, _, files in os.walk(merged_root):
         for fname in files:
             if is_video_file(fname):
                 in_path = os.path.join(root, fname)
-                base, _ = os.path.splitext(fname)
-                out_path = os.path.join(youtube_shorts_dir, f"{base}_vertical4k.webm")
-                print(f'Converting {fname} → {out_path}')
+                out_path = os.path.join(youtube_shorts_dir, f"{os.path.splitext(fname)[0]}_vertical4k.webm")
+                print(f"[CONVERT] {fname} → vertical format")
                 convert_to_vertical_webm(in_path, out_path, script_dir)
-                print(f'Saved: {out_path}')
 
-    # === MP4 Conversion for Shorts/Reels ===
+    # === Insta Reels Conversion ===
     reels_dir = os.path.join(script_dir, "insta_reels")
     convert_webm_to_mp4(youtube_shorts_dir, reels_dir, label="Insta Reels")
 
-    # Cleanup: remove all except youtube_shorts and insta_reels
+    # === Cleanup ===
+    print("\n🧹 Cleaning up temporary files...")
     for folder in ["Downed_clips", "Merged_All_Parts"]:
         folder_path = os.path.join(script_dir, folder)
         if os.path.exists(folder_path):
@@ -334,7 +335,12 @@ def main_pipeline():
                 os.remove(os.path.join(script_dir, fname))
             except Exception:
                 pass
-    print("[DONE] Pipeline complete. All outputs in youtube_shorts/ and insta_reels/")
+
+    print("\n✅ Pipeline complete!")
+    print(f"📂 Final outputs:")
+    print(f"   • YouTube Shorts → {youtube_shorts_dir}")
+    print(f"   • Insta Reels    → {reels_dir}")
+
 
 if __name__ == "__main__":
     try:
@@ -342,5 +348,5 @@ if __name__ == "__main__":
         gc.collect()
         sys.exit(0)
     except Exception as e:
-        print(f'[FATAL ERROR] {e}')
+        print(f"[FATAL ERROR] {e}")
         sys.exit(1)
