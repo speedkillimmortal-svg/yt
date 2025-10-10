@@ -78,8 +78,20 @@ def split_video_into_parts(input_path, num_parts=NUM_PARTS, output_prefix="part"
     return part_files
 
 def merge_clips_together(clip_files, merged_output_path):
-    if len(clip_files) < 2:
-        print(f"[SKIP] Not enough clips to merge → {merged_output_path}")
+    # Handle empty list
+    if not clip_files:
+        print(f"[SKIP] No clips to merge → {merged_output_path}")
+        return
+
+    # If only one clip, copy it (preserve original streams/quality)
+    if len(clip_files) == 1:
+        src = clip_files[0]
+        try:
+            os.makedirs(os.path.dirname(merged_output_path), exist_ok=True)
+            shutil.copy2(src, merged_output_path)
+            print(f"[COPIED] single clip -> {merged_output_path}")
+        except Exception as e:
+            print(f"[ERROR] copying single clip: {e}")
         return
     list_file = os.path.join(os.path.dirname(merged_output_path), "merge_list.txt")
     with open(list_file, "w") as f:
@@ -152,20 +164,16 @@ def find_and_extract(video_path, output_dir):
 def merge_all_globally(all_clips, merged_root):
     os.makedirs(merged_root, exist_ok=True)
     merged_outputs = []
-    i = 0
-    while i < len(all_clips):
-        if i + 1 < len(all_clips):
-            merged_out = os.path.join(merged_root, f"merged_shorts_{i//2+1}.webm")
-            merge_clips_together([all_clips[i], all_clips[i+1]], merged_out)
-            merged_outputs.append(merged_out)
-            i += 2
-        else:
-            # Odd leftover → merge last 3 together if possible
-            last_batch = all_clips[-3:] if len(all_clips) >= 3 else [all_clips[-1]]
-            merged_out = os.path.join(merged_root, f"merged_shorts_final.webm")
-            merge_clips_together(last_batch, merged_out)
-            merged_outputs.append(merged_out)
-            break
+    # Merge in groups of 3 to form ~30s clips (if each clip is ~10s)
+    idx = 0
+    group_count = 0
+    while idx < len(all_clips):
+        group = all_clips[idx:idx+3]
+        group_count += 1
+        merged_out = os.path.join(merged_root, f"merged_shorts_{group_count}.webm")
+        merge_clips_together(group, merged_out)
+        merged_outputs.append(merged_out)
+        idx += 3
     print(f"[INFO] Total merged global clips: {len(merged_outputs)}")
     return merged_outputs
 
@@ -173,17 +181,35 @@ def merge_all_globally(all_clips, merged_root):
 def is_video_file(filename):
     return filename.lower().endswith(('.mp4', '.mov', '.avi', '.mkv', '.webm'))
 
-def pick_random_music(background_music_dir):
+# --- Background music pool (non-repeating) ---
+# Global pool that will be initialized once per run and then consumed without repeats
+MUSIC_POOL = []
+
+def init_music_pool(background_music_dir):
+    """Populate and shuffle the MUSIC_POOL from the given directory."""
+    global MUSIC_POOL
+    MUSIC_POOL = []
     if not os.path.exists(background_music_dir):
-        return None
+        return
     files = [f for f in os.listdir(background_music_dir) if f.lower().endswith(('.mp3', '.wav', '.aac', '.m4a'))]
-    return os.path.join(background_music_dir, random.choice(files)) if files else None
+    if not files:
+        return
+    random.shuffle(files)
+    MUSIC_POOL = [os.path.join(background_music_dir, f) for f in files]
+
+def pick_music():
+    """Return the next music path from the pool (non-repeating). Returns None if pool exhausted."""
+    global MUSIC_POOL
+    if not MUSIC_POOL:
+        return None
+    return MUSIC_POOL.pop()
 
 def convert_to_vertical_webm(input_path, output_path, script_dir):
     icon_path = os.path.join(script_dir, 'generic_icon.png')
     logo_path = os.path.join(script_dir, 'channel_logo.jpg')
     background_music_dir = os.path.join(script_dir, 'background_musics')
-    music_path = pick_random_music(background_music_dir)
+    # pick a non-repeating music track from the global pool (initialized in main)
+    music_path = pick_music()
 
     video = (
         ffmpeg
@@ -267,6 +293,10 @@ def main_pipeline():
     youtube_shorts_dir = os.path.join(script_dir, "youtube_shorts")
     os.makedirs(youtube_shorts_dir, exist_ok=True)
 
+    # initialize music pool (non-repeating) for this run
+    background_music_dir = os.path.join(script_dir, 'background_musics')
+    init_music_pool(background_music_dir)
+
     for file in merged_outputs:
         base = os.path.splitext(os.path.basename(file))[0]
         out_path = os.path.join(youtube_shorts_dir, f"{base}_vertical4k.webm")
@@ -298,3 +328,4 @@ if __name__ == "__main__":
         print(f"[FATAL ERROR] {e}")
         gc.collect()
         sys.exit(1)
+
