@@ -58,23 +58,55 @@ def get_video_duration(input_path):
         print(f"[ERROR] ffprobe failed: {e}")
         return None
 
-def split_video_into_parts(input_path, num_parts=NUM_PARTS, output_prefix="part"):
+def split_video_into_parts(input_path, part_seconds=360, output_prefix="part"):
+    """Split a video into parts of `part_seconds` length.
+
+    If the video has a remainder shorter than `part_seconds`, that remainder is merged
+    into the last part (so we avoid producing a tiny final part).
+    Returns a list of produced part file paths.
+    """
     duration = get_video_duration(input_path)
     if not duration:
         return []
-    part_length = duration / num_parts
+
+    # Number of full-sized parts (floor)
+    full_parts = int(duration // part_seconds)
+    remainder = duration - (full_parts * part_seconds)
+
     part_files = []
-    for i in range(num_parts):
-        start = i * part_length
-        out_file = f"{output_prefix}{i+1}.webm"
+
+    # Special case: video shorter than one part_seconds -> single part with full duration
+    if full_parts == 0:
+        out_file = f"{output_prefix}1.webm"
         cmd = [
             "ffmpeg", "-nostdin", "-loglevel", "error", "-y",
-            "-i", input_path, "-ss", str(start), "-t", str(part_length),
+            "-i", input_path, "-ss", "0", "-t", str(duration),
             "-c", "copy", out_file
         ]
         subprocess.run(cmd, check=True)
         part_files.append(out_file)
-        print(f"[INFO] Created part: {out_file} (start={start:.2f}s, len={part_length:.2f}s)")
+        print(f"[INFO] Created part: {out_file} (start=0.00s, len={duration:.2f}s)")
+        return part_files
+
+    # Build parts. If there's a remainder, append it to the last full part.
+    for i in range(full_parts):
+        start = i * part_seconds
+        # For the last full part, add the remainder (if any)
+        if i == full_parts - 1 and remainder > 0:
+            part_len = part_seconds + remainder
+        else:
+            part_len = part_seconds
+
+        out_file = f"{output_prefix}{i+1}.webm"
+        cmd = [
+            "ffmpeg", "-nostdin", "-loglevel", "error", "-y",
+            "-i", input_path, "-ss", str(start), "-t", str(part_len),
+            "-c", "copy", out_file
+        ]
+        subprocess.run(cmd, check=True)
+        part_files.append(out_file)
+        print(f"[INFO] Created part: {out_file} (start={start:.2f}s, len={part_len:.2f}s)")
+
     return part_files
 
 def merge_clips_together(clip_files, merged_output_path):
@@ -272,8 +304,8 @@ def main_pipeline():
         print("[ERROR] input.webm not found.")
         sys.exit(1)
 
-    print("[INFO] Splitting video into parts...")
-    parts = split_video_into_parts(video_path, num_parts=NUM_PARTS, output_prefix=os.path.join(script_dir, "part"))
+    print("[INFO] Splitting video into ~6-minute parts...")
+    parts = split_video_into_parts(video_path, part_seconds=6*60, output_prefix=os.path.join(script_dir, "part"))
 
     all_extracted = []
     for i, part in enumerate(parts, start=1):
