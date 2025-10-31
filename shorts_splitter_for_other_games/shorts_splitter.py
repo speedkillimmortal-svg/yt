@@ -12,15 +12,38 @@ import subprocess
 # === CONFIG ===
 INPUT_VIDEO = "input.webm"        # input video file
 OUTPUT_DIR = "shorts_output"     # output folder
-CLIP_LENGTH = 30            # length of each short in seconds
-OUTPUT_FORMAT = "mp4"           # "webm" or "mp4"
+CLIP_LENGTH = 60            # length of each short in seconds
+OUTPUT_FORMAT = "webm"           # "webm" or "mp4"
 
-# Start times in seconds (you edit this list manually)
-START_TIMES = [
-    30,     # clip from 00:00:30 → 00:01:15
-    120,    # clip from 00:02:00 → 00:02:45
-    250,    # clip from 00:04:10 → 00:04:55
-]
+# Configuration for clip intervals
+INTERVAL = 180  # Extract clips every 3 minutes (180 seconds)
+OVERLAP = 0     # No overlap between clips
+
+def get_video_duration(input_path):
+    """Get video duration in seconds"""
+    cmd = [
+        "ffprobe", "-v", "error",
+        "-show_entries", "format=duration",
+        "-of", "default=noprint_wrappers=1:nokey=1",
+        input_path
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        return float(result.stdout.strip())
+    except (subprocess.CalledProcessError, ValueError):
+        print("[ERROR] Could not determine video duration")
+        return 0
+
+def generate_start_times(duration, interval=INTERVAL, overlap=OVERLAP):
+    """Generate clip start times at regular intervals"""
+    start_times = []
+    current_time = 0
+    
+    while current_time + CLIP_LENGTH <= duration:
+        start_times.append(current_time)
+        current_time += interval - overlap
+    
+    return start_times
 
 # Vertical crop for Shorts/Reels (16:9 → 9:16)
 CROP_FILTER = "crop=in_h*9/16:in_h:(in_w-out_w)/2:0,scale=1080:1920"
@@ -114,8 +137,18 @@ def main():
         print(f"[ERROR] Input video {INPUT_VIDEO} not found.")
         return
 
-    extract_clips(INPUT_VIDEO, OUTPUT_DIR, START_TIMES, CLIP_LENGTH, OUTPUT_FORMAT)
-    print("[DONE] All selected clips exported.")
+    # Get video duration and generate start times
+    duration = get_video_duration(INPUT_VIDEO)
+    if duration == 0:
+        return
+        
+    start_times = generate_start_times(duration)
+    print(f"\n[INFO] Video duration: {duration:.1f} seconds")
+    print(f"[INFO] Extracting {len(start_times)} clips at {INTERVAL} second intervals")
+    print(f"[INFO] Clip start times: {', '.join(f'{t:.1f}s' for t in start_times)}\n")
+
+    extract_clips(INPUT_VIDEO, OUTPUT_DIR, start_times, CLIP_LENGTH, OUTPUT_FORMAT)
+    print(f"\n[DONE] {len(start_times)} clips exported to {OUTPUT_DIR}/")
 
 
 if __name__ == "__main__":
