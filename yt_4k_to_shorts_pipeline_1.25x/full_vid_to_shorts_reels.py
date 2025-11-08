@@ -240,23 +240,27 @@ def convert_to_vertical_webm(input_path, output_path, script_dir):
     icon_path = os.path.join(script_dir, 'generic_icon.png')
     logo_path = os.path.join(script_dir, 'channel_logo.jpg')
     background_music_dir = os.path.join(script_dir, 'background_musics')
-    # pick a non-repeating music track from the global pool (initialized in main)
     music_path = pick_music()
 
+    # Speed factor (1.25x → 0.8 PTS)
+    speed_factor = 1.25
+    pts_value = 1 / speed_factor  # = 0.8
+
+    # Speed up video
     video = (
         ffmpeg
         .input(input_path)
-        .filter('setpts', '0.8*PTS')  # Speed up video by 1.25x
+        .filter('setpts', f'{pts_value}*PTS')  # speed up video
         .filter('scale', -1, TARGET_HEIGHT - 200)
         .filter('crop', f"if(gt(in_w,{TARGET_WIDTH}),{TARGET_WIDTH},in_w)", TARGET_HEIGHT - 200, '(in_w-out_w)/2', 0)
         .filter('pad', TARGET_WIDTH, TARGET_HEIGHT, 0, 0, color='black')
     )
 
+    # Overlay channel logo and icon
     if os.path.exists(icon_path):
         video = video.overlay(
             ffmpeg.input(icon_path).filter('scale', 300, 200),
-            x=0,
-            y=TARGET_HEIGHT - 200
+            x=0, y=TARGET_HEIGHT - 200
         )
     if os.path.exists(logo_path):
         video = video.overlay(
@@ -265,6 +269,31 @@ def convert_to_vertical_webm(input_path, output_path, script_dir):
             y=f'{TARGET_HEIGHT}-190'
         )
 
+    # Audio processing
+    if music_path:
+        game_audio = (
+            ffmpeg.input(input_path)
+            .audio
+            .filter('atempo', str(speed_factor))  # speed up game audio to match video
+        )
+        bgm_audio = ffmpeg.input(music_path, stream_loop=-1).audio
+
+        # Mix both audios 50:50
+        mixed_audio = ffmpeg.filter(
+            [game_audio, bgm_audio],
+            'amix',
+            inputs=2,
+            duration='shortest',
+            dropout_transition=0
+        ).filter('volume', '1.0')  # overall normalization
+    else:
+        mixed_audio = (
+            ffmpeg.input(input_path)
+            .audio
+            .filter('atempo', str(speed_factor))
+        )
+
+    # VP9 WebM output
     vp9_settings = dict(
         vcodec='libvpx-vp9',
         acodec='libopus',
@@ -275,14 +304,8 @@ def convert_to_vertical_webm(input_path, output_path, script_dir):
         pix_fmt='yuv420p'
     )
 
-    if music_path:
-        # Keep original music speed
-        audio = ffmpeg.input(music_path, stream_loop=-1).audio
-        out = ffmpeg.output(video, audio, output_path, shortest=None, **vp9_settings)
-    else:
-        # Keep original audio speed
-        audio = ffmpeg.input(input_path).audio
-        out = ffmpeg.output(video, audio, output_path, **vp9_settings)
+    # Output combined
+    out = ffmpeg.output(video, mixed_audio, output_path, **vp9_settings)
     out.global_args('-nostdin', '-loglevel', 'error').overwrite_output().run()
 
 def convert_webm_to_mp4(input_folder, output_folder, label):
