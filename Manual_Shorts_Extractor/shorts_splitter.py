@@ -3,7 +3,7 @@
 manual_shorts_extractor.py
 Extract YouTube Shorts clips from a video using manual start times.
 - Converts to vertical (1080x1920)
-- Exports BOTH .webm (VP9 + Opus) and .mp4 (H.264 + AAC) formats.
+- Exports high-quality .mp4 (H.264 + AAC) for YouTube Shorts & Instagram Reels.
 """
 
 import os
@@ -11,10 +11,9 @@ import subprocess
 
 # === CONFIG ===
 INPUT_VIDEO = "input.webm"        # input video file
-OUTPUT_DIR_WEBM = "shorts_webm"   # output folder for .webm
-OUTPUT_DIR_MP4 = "shorts_mp4"     # output folder for .mp4
-CLIP_LENGTH = 60                  # length of each short in seconds
-INTERVAL = 3000                 # Extract clips every 3 minutes (180 seconds)
+OUTPUT_DIR = "shorts"             # output folder for .mp4 shorts
+CLIP_LENGTH = 45                  # length of each short in seconds
+INTERVAL = 45                     # Extract clips continuously (no gaps)
 OVERLAP = 0                       # No overlap between clips
 
 # --- helper functions ---
@@ -44,26 +43,34 @@ def generate_start_times(duration, interval=INTERVAL, overlap=OVERLAP):
 
 
 # --- constants ---
-CROP_FILTER = "crop=in_h*9/16:in_h:(in_w-out_w)/2:0,scale=1080:1920"
+CROP_FILTER = "crop=in_h*9/16:in_h:(in_w-out_w)/2:0,scale=1080:1920:flags=lanczos,unsharp=luma_msize_x=5:luma_msize_y=5:luma_amount=1.0:chroma_msize_x=5:chroma_msize_y=5:chroma_amount=0.0"
 TARGET_W, TARGET_H = 1080, 1920
 BOTTOM_BAR = 200
 VIDEO_H = TARGET_H - BOTTOM_BAR
 
 
-def extract_clips(input_path, start_times, clip_len, fmt, out_dir):
+def extract_clips(input_path, start_times, clip_len, out_dir):
     os.makedirs(out_dir, exist_ok=True)
 
+    # Software H.264 Encoder for MAXIMUM Quality (slower but best quality)
+    # CRF 18 = Near-lossless quality (visually transparent)
+    codec_args = [
+        "-c:v", "libx264",        # Software encoder (better quality than videotoolbox)
+        "-crf", "18",             # Constant Rate Factor (18 = near-lossless, 23 = default)
+        "-preset", "slower",      # Slower = better quality/compression
+        "-profile:v", "high",
+        "-level", "4.2",          # H.264 level for 1080p
+        "-c:a", "aac",
+        "-b:a", "320k",
+        "-movflags", "+faststart"
+    ]
+
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    icon_path = os.path.join(script_dir, 'generic_icon.png')
+    logo_path = os.path.join(script_dir, 'channel_logo.jpg')
+
     for idx, start in enumerate(start_times, start=1):
-        out_file = os.path.join(out_dir, f"short_{idx}.{fmt}")
-
-        if fmt == "webm":
-            codec_args = ["-c:v", "libvpx-vp9", "-b:v", "4M", "-c:a", "libopus", "-b:a", "128k"]
-        else:
-            codec_args = ["-c:v", "libx264", "-preset", "fast", "-crf", "23", "-c:a", "aac", "-b:a", "128k"]
-
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        icon_path = os.path.join(script_dir, 'generic_icon.png')
-        logo_path = os.path.join(script_dir, 'channel_logo.jpg')
+        out_file = os.path.join(out_dir, f"short_{idx}.mp4")
 
         if os.path.exists(icon_path) or os.path.exists(logo_path):
             cmd = ["ffmpeg", "-nostdin", "-y", "-ss", str(start), "-t", str(clip_len), "-i", input_path]
@@ -80,7 +87,7 @@ def extract_clips(input_path, start_times, clip_len, fmt, out_dir):
 
             filters = []
             filters.append(
-                f"[0:v]scale=-1:{VIDEO_H},crop='if(gt(in_w,{TARGET_W}),{TARGET_W},in_w)':{VIDEO_H}:'(in_w-out_w)/2':0,"
+                f"[0:v]scale=-1:{VIDEO_H}:flags=lanczos,unsharp=luma_msize_x=5:luma_msize_y=5:luma_amount=1.0:chroma_msize_x=5:chroma_msize_y=5:chroma_amount=0.0,crop='if(gt(in_w,{TARGET_W}),{TARGET_W},in_w)':{VIDEO_H}:'(in_w-out_w)/2':0,"
                 f"pad={TARGET_W}:{TARGET_H}:0:0:black[v0]"
             )
 
@@ -88,11 +95,13 @@ def extract_clips(input_path, start_times, clip_len, fmt, out_dir):
             overlay_count = 0
             for name, idx_input in overlays:
                 if name == 'icon':
-                    filters.append(f"[{idx_input}:v]scale=300:{BOTTOM_BAR}[icon]")
+                    # Use Lanczos scaling for sharp icon
+                    filters.append(f"[{idx_input}:v]scale=300:{BOTTOM_BAR}:flags=lanczos[icon]")
                     filters.append(f"{map_chain}[icon]overlay=0:{VIDEO_H}[v{overlay_count+1}]")
                     map_chain = f"[v{overlay_count+1}]"
                 elif name == 'logo':
-                    filters.append(f"[{idx_input}:v]scale=180:180[logo]")
+                    # Use Lanczos scaling for sharp logo
+                    filters.append(f"[{idx_input}:v]scale=180:180:flags=lanczos[logo]")
                     logo_x = TARGET_W - 180 - 20
                     logo_y = TARGET_H - 180 - 10
                     filters.append(f"{map_chain}[logo]overlay={logo_x}:{logo_y}[v{overlay_count+1}]")
@@ -127,16 +136,12 @@ def main():
     print(f"\n[INFO] Video duration: {duration:.1f}s")
     print(f"[INFO] Extracting {len(start_times)} clips at {INTERVAL}s intervals\n")
 
-    # --- Export both formats ---
-    print("[STEP] Exporting WebM versions...")
-    extract_clips(INPUT_VIDEO, start_times, CLIP_LENGTH, "webm", OUTPUT_DIR_WEBM)
-
-    print("\n[STEP] Exporting MP4 versions...")
-    extract_clips(INPUT_VIDEO, start_times, CLIP_LENGTH, "mp4", OUTPUT_DIR_MP4)
+    # --- Export High Quality MP4 Shorts ---
+    print("[STEP] Generating High Quality MP4 Shorts (YouTube & Instagram)...")
+    extract_clips(INPUT_VIDEO, start_times, CLIP_LENGTH, OUTPUT_DIR)
 
     print(f"\n✅ [DONE] Export complete:")
-    print(f"   • {OUTPUT_DIR_WEBM}/ (YouTube Shorts)")
-    print(f"   • {OUTPUT_DIR_MP4}/ (Instagram Reels)")
+    print(f"   • {OUTPUT_DIR}/ (YouTube Shorts & Instagram Reels - H.264)")
 
 
 if __name__ == "__main__":

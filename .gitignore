@@ -25,3 +25,17 @@ output_clips/
 # Other
 *.swp
 *.swo
+
+# Video Files (Large)
+*.mp4
+*.webm
+*.mov
+*.mkv
+*.avi
+
+# Script Output Directories
+shorts/
+Downed_clips/
+Merged_All_Parts/
+part*.webm
+merge_list.txt

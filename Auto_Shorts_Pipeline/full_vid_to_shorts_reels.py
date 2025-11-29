@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Full 4K Kill Extractor to Shorts/Reels Pipeline (Optimized Final Version)
+Full 4K Kill Extractor to Shorts Pipeline (Optimized Final Version)
 - Extracts "ENEMY DOWNED" clips from input.webm.
 - Merges all extracted clips globally (not part-wise) into pairs.
-- Converts merged clips into vertical 1080x1920 .webm (YouTube Shorts) and .mp4 (Insta Reels).
+- Converts merged clips into vertical 1080x1920 .mp4 (YouTube Shorts & Instagram Reels).
 - Automatically cleans all temporary files/folders after execution.
 """
 
@@ -236,7 +236,7 @@ def pick_music():
         return None
     return MUSIC_POOL.pop()
 
-def convert_to_vertical_webm(input_path, output_path, script_dir):
+def convert_to_vertical_mp4(input_path, output_path, script_dir):
     icon_path = os.path.join(script_dir, 'generic_icon.png')
     logo_path = os.path.join(script_dir, 'channel_logo.jpg')
     background_music_dir = os.path.join(script_dir, 'background_musics')
@@ -246,25 +246,27 @@ def convert_to_vertical_webm(input_path, output_path, script_dir):
     speed_factor = 1.25
     pts_value = 1 / speed_factor  # = 0.8
 
-    # Speed up video
+    # Speed up video with high-quality scaling
+    # Scale to 1720px (leaving 200px for overlay bar at bottom)
     video = (
         ffmpeg
         .input(input_path)
         .filter('setpts', f'{pts_value}*PTS')  # speed up video
-        .filter('scale', -1, TARGET_HEIGHT - 200)
+        .filter('scale', -1, TARGET_HEIGHT - 200, flags='lanczos')  # Scale with high-quality Lanczos algorithm
+        .filter('unsharp', luma_msize_x=5, luma_msize_y=5, luma_amount=1.0, chroma_msize_x=5, chroma_msize_y=5, chroma_amount=0.0)  # Sharpen after scaling
         .filter('crop', f"if(gt(in_w,{TARGET_WIDTH}),{TARGET_WIDTH},in_w)", TARGET_HEIGHT - 200, '(in_w-out_w)/2', 0)
-        .filter('pad', TARGET_WIDTH, TARGET_HEIGHT, 0, 0, color='black')
+        .filter('pad', TARGET_WIDTH, TARGET_HEIGHT, 0, 0, color='black')  # Add 200px black bar at bottom for overlays
     )
 
-    # Overlay channel logo and icon
+    # Overlay channel logo and icon with high-quality scaling
     if os.path.exists(icon_path):
         video = video.overlay(
-            ffmpeg.input(icon_path).filter('scale', 300, 200),
+            ffmpeg.input(icon_path).filter('scale', 300, 200, flags='lanczos'),
             x=0, y=TARGET_HEIGHT - 200
         )
     if os.path.exists(logo_path):
         video = video.overlay(
-            ffmpeg.input(logo_path).filter('scale', 180, 180),
+            ffmpeg.input(logo_path).filter('scale', 180, 180, flags='lanczos'),
             x=f'{TARGET_WIDTH}-200',
             y=f'{TARGET_HEIGHT}-190'
         )
@@ -278,14 +280,16 @@ def convert_to_vertical_webm(input_path, output_path, script_dir):
         )
         bgm_audio = ffmpeg.input(music_path, stream_loop=-1).audio
 
-        # Mix both audios 50:50
+        # Mix audios with better balance (70% game audio, 30% background music)
+        # This prevents clipping and maintains game audio clarity
         mixed_audio = ffmpeg.filter(
             [game_audio, bgm_audio],
             'amix',
             inputs=2,
             duration='shortest',
-            dropout_transition=0
-        ).filter('volume', '1.0')  # overall normalization
+            dropout_transition=0,
+            weights='0.7 0.3'  # Game audio louder than background music
+        ).filter('volume', '0.95').filter('alimiter', limit=0.95, attack=5, release=50)  # Prevent clipping
     else:
         mixed_audio = (
             ffmpeg.input(input_path)
@@ -293,36 +297,25 @@ def convert_to_vertical_webm(input_path, output_path, script_dir):
             .filter('atempo', str(speed_factor))
         )
 
-    # VP9 WebM output
-    vp9_settings = dict(
-        vcodec='libvpx-vp9',
-        acodec='libopus',
-        crf=30,
-        **{"b:v": "0"},
-        audio_bitrate='128k',
-        **{"deadline": "realtime", "cpu-used": "4"},
+    # Software H.264 Encoder for MAXIMUM Quality (slower but best quality)
+    # CRF 18 = Near-lossless quality (lower = better, 18 is visually transparent)
+    mp4_settings = dict(
+        vcodec='libx264',        # Software encoder (better quality than videotoolbox)
+        acodec='aac',
+        **{"crf": "18"},         # Constant Rate Factor (18 = near-lossless, 23 = default)
+        **{"preset": "slower"},  # Slower = better quality/compression (veryslow/slower/slow/medium)
+        **{"b:a": "320k"},       # High Quality Audio
+        **{"profile:v": "high"},
+        **{"level": "4.2"},      # H.264 level for 1080p
+        movflags="+faststart",
         pix_fmt='yuv420p'
     )
 
     # Output combined
-    out = ffmpeg.output(video, mixed_audio, output_path, **vp9_settings)
-    out.global_args('-nostdin', '-loglevel', 'error').overwrite_output().run()
+    out = ffmpeg.output(video, mixed_audio, output_path, **mp4_settings)
+    out.global_args('-nostdin', '-loglevel', 'error', '-y').run()
 
-def convert_webm_to_mp4(input_folder, output_folder, label):
-    if not os.path.exists(output_folder):
-        os.makedirs(output_folder)
-    for file in os.listdir(input_folder):
-        if file.lower().endswith('.webm'):
-            input_path = os.path.join(input_folder, file)
-            output_path = os.path.join(output_folder, os.path.splitext(file)[0] + ".mp4")
-            crop_filter = "crop=in_h*9/16:in_h:(in_w-out_w)/2:0,scale=1080:1920"  # Normal speed for Instagram
-            subprocess.run([
-                "ffmpeg", "-i", input_path, "-vf", crop_filter,
-                "-c:v", "h264_videotoolbox", "-b:v", "6M", "-maxrate", "8M",
-                "-bufsize", "12M", "-c:a", "aac", "-b:a", "128k",
-                "-movflags", "+faststart", "-y", output_path
-            ], check=True)
-    print(f"[DONE] {label} conversion complete → {output_folder}")
+
 
 # === MAIN PIPELINE ===
 def main_pipeline():
@@ -350,8 +343,8 @@ def main_pipeline():
     merged_root = os.path.join(script_dir, "Merged_All_Parts")
     merged_outputs = merge_all_globally(all_extracted, merged_root)
 
-    youtube_shorts_dir = os.path.join(script_dir, "youtube_shorts")
-    os.makedirs(youtube_shorts_dir, exist_ok=True)
+    shorts_dir = os.path.join(script_dir, "shorts")
+    os.makedirs(shorts_dir, exist_ok=True)
 
     # initialize music pool (non-repeating) for this run
     background_music_dir = os.path.join(script_dir, 'background_musics')
@@ -359,11 +352,9 @@ def main_pipeline():
 
     for file in merged_outputs:
         base = os.path.splitext(os.path.basename(file))[0]
-        out_path = os.path.join(youtube_shorts_dir, f"{base}_vertical4k.webm")
-        convert_to_vertical_webm(file, out_path, script_dir)
-
-    reels_dir = os.path.join(script_dir, "insta_reels")
-    convert_webm_to_mp4(youtube_shorts_dir, reels_dir, label="Insta Reels")
+        # Generate directly as MP4 (works for both YouTube Shorts & Instagram Reels)
+        out_path = os.path.join(shorts_dir, f"{base}_vertical4k.mp4")
+        convert_to_vertical_mp4(file, out_path, script_dir)
 
     # Cleanup all temporary files/folders
     for folder in ["Downed_clips", "Merged_All_Parts"]:
@@ -377,8 +368,7 @@ def main_pipeline():
 
     gc.collect()
     print("\n✅ [DONE] All outputs saved in:")
-    print(f"   - YouTube Shorts: {youtube_shorts_dir}")
-    print(f"   - Insta Reels: {reels_dir}")
+    print(f"   - Shorts (YouTube & Instagram): {shorts_dir}")
 
 if __name__ == "__main__":
     try:
