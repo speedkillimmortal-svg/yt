@@ -56,7 +56,7 @@ KILL_KEYWORDS = ["ENEMY DOWNED"]
 PRE_SEC = 5
 POST_SEC = 5
 OCR_INTERVAL = 1.0
-OCR_RESIZE = 0.6
+OCR_RESIZE = 0.5
 PART_SECONDS = 360   # 6 minutes
 COOLDOWN = PRE_SEC + POST_SEC  # cooldown between detections
 
@@ -291,7 +291,7 @@ def apply_speed_and_bgm(input_path, output_path, music_dir="background_musics"):
             "-c:v", "libvpx-vp9",         # VP9 for YouTube 4K
             "-b:v", "0",                  # Constrained Quality mode
             "-crf", "18",                 # Near-lossless for VP9 4K
-            "-cpu-used", "1",             # High quality (slower)
+            "-cpu-used", "2",             # High quality (balanced)
             "-row-mt", "1",               # Enable row-based multithreading
             # Audio encoding
             "-c:a", "libopus",            # Opus audio (best for WebM)
@@ -324,7 +324,7 @@ def apply_speed_and_bgm(input_path, output_path, music_dir="background_musics"):
             "-c:v", "libvpx-vp9",         # VP9 for YouTube 4K
             "-b:v", "0",                  # Constrained Quality mode
             "-crf", "18",                 # Near-lossless for VP9 4K
-            "-cpu-used", "1",             # High quality (slower)
+            "-cpu-used", "2",             # High quality (balanced)
             "-row-mt", "1",               # Enable row-based multithreading
             # Audio encoding
             "-c:a", "libopus",            # Opus audio (best for WebM)
@@ -394,9 +394,9 @@ def main():
     worker_args = [(p, outdir) for p in parts]
     
     # Use ProcessPoolExecutor
-    # Limit max_workers to 2 to prevent memory exhaustion (EasyOCR + PyTorch is heavy)
-    max_workers = 2
-    print(f"[INFO] Using {max_workers} parallel workers for OCR to save RAM.")
+    # Limit max_workers to 1 to save RAM (EasyOCR + PyTorch is heavy)
+    max_workers = 1
+    print(f"[INFO] Using {max_workers} worker for OCR to minimize Memory usage.")
     
     with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
         results = executor.map(process_part, worker_args)

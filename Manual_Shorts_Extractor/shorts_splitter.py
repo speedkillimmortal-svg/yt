@@ -52,14 +52,15 @@ VIDEO_H = TARGET_H - BOTTOM_BAR
 def extract_clips(input_path, start_times, clip_len, out_dir):
     os.makedirs(out_dir, exist_ok=True)
 
-    # Software H.264 Encoder for MAXIMUM Quality (slower but best quality)
-    # CRF 18 = Near-lossless quality (visually transparent)
+    # Software H.264 Encoder for MAXIMUM Quality
+    # Reverted to CPU encoding for best quality, but added '-threads 8' to limit usage.
     codec_args = [
-        "-c:v", "libx264",        # Software encoder (better quality than videotoolbox)
-        "-crf", "18",             # Constant Rate Factor (18 = near-lossless, 23 = default)
-        "-preset", "slower",      # Slower = better quality/compression
+        "-c:v", "libx264",
+        "-crf", "18",             # Near-lossless quality
+        "-preset", "medium",      # Good balance of speed/compression
+        "-threads", "8",          # <--- LIMITS CPU USAGE (8 threads = ~80% load)
         "-profile:v", "high",
-        "-level", "4.2",          # H.264 level for 1080p
+        "-level", "4.2",
         "-c:a", "aac",
         "-b:a", "320k",
         "-movflags", "+faststart"

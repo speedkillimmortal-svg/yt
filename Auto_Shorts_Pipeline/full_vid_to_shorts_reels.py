@@ -23,8 +23,8 @@ PRE_SEC = 5
 POST_SEC = 5
 NUM_PARTS = 4
 OCR_INTERVAL = 1.0
-OCR_RESIZE = 0.6
-MAX_THREADS = 2
+OCR_RESIZE = 0.5
+MAX_THREADS = 1
 COOLDOWN_SEC = PRE_SEC + POST_SEC
 TARGET_WIDTH = 1080
 TARGET_HEIGHT = 1920
@@ -303,7 +303,7 @@ def convert_to_vertical_mp4(input_path, output_path, script_dir):
         vcodec='libx264',        # Software encoder (better quality than videotoolbox)
         acodec='aac',
         **{"crf": "18"},         # Constant Rate Factor (18 = near-lossless, 23 = default)
-        **{"preset": "slower"},  # Slower = better quality/compression (veryslow/slower/slow/medium)
+        **{"preset": "medium"},  # Medium = good balance of speed/quality (slower was too heavy)
         **{"b:a": "320k"},       # High Quality Audio
         **{"profile:v": "high"},
         **{"level": "4.2"},      # H.264 level for 1080p

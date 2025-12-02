@@ -1,0 +1,23 @@
+# Input videos
+input/*.webm
+
+# Output videos
+*.webm
+merged_output.webm
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp
