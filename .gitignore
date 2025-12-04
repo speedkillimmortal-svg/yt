@@ -33,9 +33,21 @@ output_clips/
 *.mkv
 *.avi
 
+# Audio Files (Large)
+*.mp3
+*.wav
+*.aac
+*.m4a
+
 # Script Output Directories
 shorts/
 Downed_clips/
 Merged_All_Parts/
 part*.webm
 merge_list.txt
+
+# Unified Pipeline Outputs
+kill_compilation/
+extracted_clips/
+merged_shorts_temp/
+compilation_raw.webm
