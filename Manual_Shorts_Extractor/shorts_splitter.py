@@ -43,7 +43,9 @@ def generate_start_times(duration, interval=INTERVAL, overlap=OVERLAP):
 
 
 # --- constants ---
+# --- constants ---
 CROP_FILTER = "crop=in_h*9/16:in_h:(in_w-out_w)/2:0,scale=1080:1920:flags=lanczos,unsharp=luma_msize_x=5:luma_msize_y=5:luma_amount=1.0:chroma_msize_x=5:chroma_msize_y=5:chroma_amount=0.0"
+
 TARGET_W, TARGET_H = 1080, 1920
 BOTTOM_BAR = 200
 VIDEO_H = TARGET_H - BOTTOM_BAR
@@ -52,13 +54,13 @@ VIDEO_H = TARGET_H - BOTTOM_BAR
 def extract_clips(input_path, start_times, clip_len, out_dir):
     os.makedirs(out_dir, exist_ok=True)
 
-    # Software H.264 Encoder for MAXIMUM Quality
-    # Reverted to CPU encoding for best quality, but added '-threads 8' to limit usage.
+    # Software H.264 Encoder for MAXIMUM Quality (Reverted by User Request)
+    # CPU Usage will be high (~95%) but quality is mathematically superior.
     codec_args = [
         "-c:v", "libx264",
         "-crf", "18",             # Near-lossless quality
         "-preset", "medium",      # Good balance of speed/compression
-        "-threads", "8",          # <--- LIMITS CPU USAGE (8 threads = ~80% load)
+        "-threads", "7",          # Limit threads to prevent system freeze
         "-profile:v", "high",
         "-level", "4.2",
         "-c:a", "aac",

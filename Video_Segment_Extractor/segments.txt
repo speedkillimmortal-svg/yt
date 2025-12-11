@@ -1,6 +1,6 @@
 # Video segments to extract
 # Format: START-END (MM:SS or HH:MM:SS)
 
-0:00-5:10
-5:12-31:10
-31:12-59:36
+00:00-31:12
+31:12-1:00:00
+

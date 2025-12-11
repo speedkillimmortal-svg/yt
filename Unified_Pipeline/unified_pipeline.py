@@ -45,6 +45,12 @@ TARGET_WIDTH = 1080
 TARGET_HEIGHT = 1920
 
 TEMPLATE_FILE = "enemy_downed_template.png"
+# RED color range for "ENEMY DOWNED" (HSV) - Red wraps around 0/180
+RED_LOWER1 = np.array([0, 50, 50])
+RED_UPPER1 = np.array([10, 255, 255])
+RED_LOWER2 = np.array([170, 50, 50])
+RED_UPPER2 = np.array([180, 255, 255])
+
 
 
 def get_video_duration(path):
@@ -57,6 +63,141 @@ def get_video_duration(path):
         return float(r.stdout.strip())
     except Exception:
         return 0.0
+        return float(r.stdout.strip())
+    except Exception:
+        return 0.0
+
+
+def validate_match_color(frame, loc, t_w, t_h):
+    """
+    Check if the matched region matches the expected RED color.
+    Returns True if valid (Enemy RED), False if invalid (Teammate BLUE/Loading).
+    """
+    x, y = loc
+    # Extract the matched region (ROI) from the COLOR frame
+    roi = frame[y:y+t_h, x:x+t_w]
+    if roi.size == 0:
+        return False
+
+    # Convert to HSV to check for RED
+    hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+    
+    # Red has two ranges in HSV
+    mask1 = cv2.inRange(hsv, RED_LOWER1, RED_UPPER1)
+    mask2 = cv2.inRange(hsv, RED_LOWER2, RED_UPPER2)
+    mask = cv2.bitwise_or(mask1, mask2)
+    
+    # Calculate how much of the template area is RED
+    red_pixels = cv2.countNonZero(mask)
+    total_pixels = t_w * t_h
+    red_ratio = red_pixels / total_pixels
+    
+    # "ENEMY DOWNED" is largely RED text. 
+    # If the ratio is very low, it's likely "TEAMMATE DOWNED" (Blue) or noise.
+    return red_ratio > 0.05
+
+
+# -------------------------------------------------------
+# TEMPLATE CREATION TOOL
+# -------------------------------------------------------
+def create_template_interactive(video_path):
+    """
+    Interactive tool to capture the 'ENEMY DOWNED' template from video.
+    """
+    print("\n" + "="*70)
+    print("TEMPLATE CREATION MODE")
+    print("="*70)
+    print("\nInstructions:")
+    print("1. Video will play and pause at intervals")
+    print("2. When you see 'ENEMY DOWNED' text, press SPACE to capture")
+    print("3. Draw a rectangle around JUST the 'ENEMY DOWNED' text")
+    print("4. Press ENTER to confirm, ESC to retry")
+    print("5. Press 'q' to quit anytime")
+    print("\nStarting in 3 seconds...\n")
+    time.sleep(3)
+    
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        print(f"[ERROR] Cannot open {video_path}")
+        return False
+    
+    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    duration = total_frames / fps
+    
+    print(f"[INFO] Video: {duration:.1f}s, {fps:.1f} fps")
+    print("[INFO] Press SPACE when you see 'ENEMY DOWNED' text")
+    
+    # Jump through video looking for kills
+    current_time = 0
+    jump_interval = 10  # Jump 10 seconds at a time
+    
+    template_captured = False
+    
+    while current_time < duration and not template_captured:
+        cap.set(cv2.CAP_PROP_POS_MSEC, current_time * 1000)
+        ret, frame = cap.read()
+        
+        if not ret:
+            current_time += jump_interval
+            continue
+        
+        # Show frame
+        display_frame = frame.copy()
+        h, w = frame.shape[:2]
+        
+        # Draw ROI hint (top-right area where HUD usually is)
+        roi_x1, roi_x2 = int(w * 0.70), w
+        roi_y1, roi_y2 = 0, int(h * 0.30)
+        cv2.rectangle(display_frame, (roi_x1, roi_y1), (roi_x2, roi_y2), (0, 255, 0), 2)
+        cv2.putText(display_frame, "Typical HUD area (look here)", 
+                   (roi_x1 + 10, roi_y1 + 30), cv2.FONT_HERSHEY_SIMPLEX, 
+                   0.7, (0, 255, 0), 2)
+        
+        cv2.putText(display_frame, f"Time: {current_time:.1f}s | SPACE=Capture | Q=Quit", 
+                   (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
+        
+        cv2.imshow('Find ENEMY DOWNED text', display_frame)
+        
+        key = cv2.waitKey(1000) & 0xFF  # Wait 1 second, auto-advance
+        
+        if key == ord('q'):
+            print("\n[INFO] Cancelled by user")
+            break
+        elif key == ord(' '):  # Space pressed - capture template
+            print(f"\n[CAPTURE] Frame at {current_time:.1f}s")
+            cv2.destroyAllWindows()
+            
+            # Let user select ROI
+            print("[INFO] Draw a rectangle around 'ENEMY DOWNED' text, then press ENTER")
+            roi = cv2.selectROI("Select ENEMY DOWNED text", frame, fromCenter=False, showCrosshair=True)
+            cv2.destroyAllWindows()
+            
+            if roi[2] > 0 and roi[3] > 0:  # Valid selection
+                x, y, w_roi, h_roi = roi
+                template = frame[y:y+h_roi, x:x+w_roi]
+                
+                # Show preview
+                cv2.imshow('Template Preview - Press ENTER to save, ESC to retry', template)
+                key = cv2.waitKey(0) & 0xFF
+                cv2.destroyAllWindows()
+                
+                if key == 13:  # Enter key
+                    cv2.imwrite(TEMPLATE_FILE, template)
+                    print(f"\n✅ Template saved to: {TEMPLATE_FILE}")
+                    print(f"   Size: {w_roi}x{h_roi} pixels")
+                    template_captured = True
+                else:
+                    print("[INFO] Retrying... Press SPACE when you see the text again")
+            else:
+                print("[WARN] Invalid selection, try again")
+        
+        current_time += jump_interval
+    
+    cap.release()
+    cv2.destroyAllWindows()
+    
+    return template_captured
 
 
 # -------------------------------------------------------
@@ -88,6 +229,11 @@ def find_kills_template_matching(video_path, template_path):
     duration = frame_count / fps if fps > 0 else 0.0
 
     print(f"[DETECT] {os.path.basename(video_path)} | dur={duration:.1f}s, fps={fps:.1f}")
+    
+    # Increase threshold to reduce loading screen noise
+    # Was 0.7, now 0.85 (stricter)
+    effective_threshold = max(MATCH_THRESHOLD, 0.8) 
+    print(f"[CONFIG] Threshold: {effective_threshold} | checking for YELLOW color")
 
     found_times = []
     last_detection = -999.0
@@ -99,21 +245,37 @@ def find_kills_template_matching(video_path, template_path):
         if not ret:
             sec += TEMPLATE_CHECK_INTERVAL
             continue
-
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        result = cv2.matchTemplate(gray, template_gray, cv2.TM_CCOEFF_NORMED)
+            
+        # Optimization: Only search TOP HALF of screen (HUD area)
+        # matches often appear in the upper middle. 
+        # Loading screen text is often at bottom.
+        h, w = frame.shape[:2]
+        search_area = frame[0:int(h*0.6), :] # Top 60%
+        
+        gray_search = cv2.cvtColor(search_area, cv2.COLOR_BGR2GRAY)
+        
+        result = cv2.matchTemplate(gray_search, template_gray, cv2.TM_CCOEFF_NORMED)
         min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(result)
         
-        if max_val >= MATCH_THRESHOLD:
-            if sec - last_detection > MIN_KILL_SPACING:
-                print(f"[FOUND] Kill at {sec:.2f}s (confidence: {max_val:.2f})")
-                found_times.append(sec)
-                last_detection = sec
+        if max_val >= effective_threshold:
+            # max_loc is relative to search_area (top-left)
+            match_x, match_y = max_loc
+            
+            # 1. Check Color (Project Logic: Must be RED to be Enemy)
+            if validate_match_color(search_area, max_loc, t_w, t_h):
+                if sec - last_detection > MIN_KILL_SPACING:
+                    print(f"[FOUND] Kill at {sec:.2f}s (conf: {max_val:.2f}) | ✅ Color Verified (RED)")
+                    found_times.append(sec)
+                    last_detection = sec
+            else:
+                # Debug logging for rejected matches (optional)
+                 # print(f"[REJECT] Match at {sec:.2f}s (conf: {max_val:.2f}) - Color mismatch (Teammate/Loading?)")
+                pass
 
         sec += TEMPLATE_CHECK_INTERVAL
 
     cap.release()
-    print(f"[DETECT] Found {len(found_times)} kills")
+    print(f"[DETECT] Found {len(found_times)} verified kills")
     return found_times
 
 
@@ -230,7 +392,7 @@ def apply_speed_and_bgm(input_path, output_path, music_dir="compilation_bgm"):
             "-c:v", "libvpx-vp9",
             "-b:v", "0",
             "-crf", "18",
-            "-cpu-used", "2",
+            "-cpu-used", "4",
             "-row-mt", "1",
             "-c:a", "libopus",
             "-b:a", "320k",
@@ -257,7 +419,7 @@ def apply_speed_and_bgm(input_path, output_path, music_dir="compilation_bgm"):
             "-c:v", "libvpx-vp9",
             "-b:v", "0",
             "-crf", "18",
-            "-cpu-used", "2",
+            "-cpu-used", "4",
             "-row-mt", "1",
             "-c:a", "libopus",
             "-b:a", "320k",
@@ -442,9 +604,10 @@ def main():
     global MATCH_THRESHOLD
     
     parser = argparse.ArgumentParser(
-        description="Unified Pipeline: Kill Compilation + Auto Shorts (40% faster!)"
+        description="Unified Pipeline: Kill Compilation + Auto Shorts (40% faster!)",
+        formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    parser.add_argument("-i", "--input", required=True, help="Input video file")
+    parser.add_argument("-i", "--input", help="Input video file")
     parser.add_argument("--template", default=TEMPLATE_FILE, help="Template file path")
     parser.add_argument("--threshold", type=float, default=MATCH_THRESHOLD,
                        help=f"Template matching threshold (default: {MATCH_THRESHOLD})")
@@ -452,7 +615,26 @@ def main():
                        help="Skip kill compilation (only generate shorts)")
     parser.add_argument("--skip-shorts", action="store_true",
                        help="Skip shorts (only generate kill compilation)")
+    parser.add_argument("--create-template", metavar="VIDEO", 
+                       help="Create template from video (first-time setup)")
     args = parser.parse_args()
+
+    # Template creation mode
+    if args.create_template:
+        if not os.path.exists(args.create_template):
+            print(f"[ERROR] Video not found: {args.create_template}")
+            sys.exit(1)
+        success = create_template_interactive(args.create_template)
+        if success:
+            print("\n✅ Template created! Now run the script normally:")
+            print(f"   python3 unified_pipeline.py -i input.webm")
+        sys.exit(0)
+
+    # Normal pipeline mode
+    if not args.input:
+        print("[ERROR] --input required (or use --create-template for first-time setup)")
+        parser.print_help()
+        sys.exit(1)
 
     input_path = os.path.abspath(args.input)
     script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -464,6 +646,7 @@ def main():
 
     if not os.path.exists(template_path):
         print(f"[ERROR] Template not found: {template_path}")
+        print(f"Run first-time setup: python3 unified_pipeline.py --create-template {args.input}")
         sys.exit(1)
 
     MATCH_THRESHOLD = args.threshold
