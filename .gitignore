@@ -19,6 +19,7 @@ __pycache__/
 
 # Output folders
 output_clips/
+processed_clips/
 *.log
 *.tmp
 
